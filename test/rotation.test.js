@@ -4,6 +4,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const rotation = require('../src/lib/rotation');
+const { assertOwnerOnly } = require('./helpers/owner-only');
 
 test('token measurement reads a bounded tail and uses the last reported model usage', () => {
   let read = null;
@@ -85,7 +86,7 @@ test('session records are private, replace the previous session, and invalidate 
   };
   const file = rotation.writeSessionRecord(dir, record);
   assert.equal(path.dirname(file), dir);
-  assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  assertOwnerOnly(file);
   assert.equal(rotation.readSessionRecord(dir, '../scout').sessionId, 'old');
 
   rotation.writeSessionRecord(dir, { ...record, sessionId: 'new' });

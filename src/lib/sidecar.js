@@ -16,6 +16,7 @@ const path = require('path');
 const core = require('./sidecar-core');
 const inputDraft = require('./input-draft');
 const rotation = require('./rotation');
+const { tightenAcl } = require('./win-acl');
 
 const DEFAULTS = {
   historyPollMs: 15_000,
@@ -90,8 +91,14 @@ class Sidecar extends EventEmitter {
     if (!this.statePath) return false;
     try {
       fs.mkdirSync(path.dirname(this.statePath), { recursive: true, mode: 0o700 });
-      // 0600: the queue holds message bodies, which are as private as the messages were.
+      // NOTE: deliberately do NOT tightenAcl() the parent directory here. statePath's parent
+      // is the shared data dir (it also holds the sqlite db, session transcripts, etc.).
+      // icacls /inheritance:r on a shared dir strips the inherited ACEs that its *sibling*
+      // files rely on, which revokes our own read access to them (observed: transcript reads
+      // start returning EPERM, so rotation.measure() goes null and reminders silently stop).
+      // Owner-only privacy is a per-FILE guarantee on win32: tighten the file, not the dir.
       fs.writeFileSync(this.statePath, JSON.stringify({ ...this.state, updatedAt: new Date(this.now()).toISOString() }, null, 2), { mode: 0o600 });
+      tightenAcl(this.statePath); // no-op off win32; the real owner-only enforcement on NTFS
       return true;
     } catch (e) {
       this.emit('event', { type: 'state-save-failed', error: e.message });
@@ -503,6 +510,7 @@ class Sidecar extends EventEmitter {
       const file = path.join(dir, `${stamp}-${core.fingerprint(text).slice(0, 8)}.txt`);
       fs.writeFileSync(file, text, { mode: 0o600 });
       fs.chmodSync(file, 0o600);
+      tightenAcl(file); // no-op off win32; the real owner-only enforcement on NTFS (per-FILE)
       return file;
     } catch (e) {
       this.emit('event', { type: 'body-save-failed', agent, error: e.message });

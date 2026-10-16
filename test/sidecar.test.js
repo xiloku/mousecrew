@@ -9,6 +9,7 @@ const { buildIdentity } = require('../src/lib/identity');
 const { load, normalizeAgent } = require('../src/config');
 const core = require('../src/lib/sidecar-core');
 const rotation = require('../src/lib/rotation');
+const { assertOwnerOnly } = require('./helpers/owner-only');
 
 // These drive the engine against an in-memory terminal and assert its structured events.
 //
@@ -498,7 +499,7 @@ test('a local wake is persisted before its source file is removed', () => {
 
   assert.deepEqual(result, { queued: 1, rejected: 0, deferred: 0, failed: 0, merged: 0 });
   assert.equal(fs.existsSync(source), false);
-  assert.equal(fs.statSync(dir).mode & 0o777, 0o700);
+  assertOwnerOnly(dir, { dir: true });
   assert.deepEqual(h.sc.state.pending.map(({ agent, sender, kind, content, sourceKey }) => (
     { agent, sender, kind, content, sourceKey }
   )), [{
@@ -830,7 +831,7 @@ test('long delivery text is stored privately and the injected prefix points to i
     + `[group batch] 2 messages delivered together\n\n\n[truncated — read the full message before replying: ${match[1]}]`
       .concat('\n  — reply with: mousecrew say --as architect "..."').length);
   assert.equal(fs.readFileSync(match[1], 'utf8'), full);
-  assert.equal(fs.statSync(match[1]).mode & 0o777, 0o600);
+  assertOwnerOnly(match[1]);
 });
 
 test('inline limit applies to the body rather than envelope overhead', async () => {
@@ -1120,8 +1121,7 @@ test('the queue survives a restart', async () => {
   await h.sc.deliver();
 
   const statePath = h.sc.statePath;
-  const mode = fs.statSync(statePath).mode & 0o777;
-  assert.equal(mode, 0o600, 'the queue holds message bodies and is as private as they were');
+  assertOwnerOnly(statePath); // the queue holds message bodies and is as private as they were
 
   const revived = new Sidecar(
     { adapter: h.adapter, identity: buildIdentity(CREW), agents: CREW, client: { history: async () => [] }, statePath, now: () => 1_000_000 },

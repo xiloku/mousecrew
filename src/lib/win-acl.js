@@ -109,6 +109,13 @@ function assertOwnerOnlyAccess(file) {
     const bare = bareAccount(p);
     if (bare === me) continue;
     if (ALWAYS_ALLOWED.has(bare)) continue;
+    // The per-logon SID "NT AUTHORITY\LogonSessionId_<auth>_<id>" is the current interactive
+    // logon session itself — Windows stamps it onto freshly created files, and it survives
+    // even an explicit `icacls /inheritance:r /grant:r <user>:F`. It is scoped to this one
+    // logon (not a shared group like Users/Everyone), so it is owner-equivalent and must not
+    // count as "shared". Without this, a correctly locked-down token file would be rejected
+    // and readTokenFile would fail closed — exactly the Windows-won't-start bug this guards.
+    if (/^LOGONSESSIONID_\d+_\d+$/.test(bare)) continue;
     offenders.push(p);
   }
   if (offenders.length) {

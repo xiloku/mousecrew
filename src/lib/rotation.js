@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const { randomUUID } = require('crypto');
 const { execFileSync } = require('child_process');
+const { tightenAcl } = require('./win-acl');
 
 const TAIL_BYTES = 128 * 1024;
 const LOCK_WAIT_MS = 5000;
@@ -211,8 +212,10 @@ function writeSessionRecordUnlocked(dir, record, {
   try {
     writeFile(temp, JSON.stringify(record, null, 2) + '\n', { mode: 0o600 });
     chmod(temp, 0o600);
+    tightenAcl(temp); // no-op off win32; on win32 this is what actually makes it owner-only
     rename(temp, file);
     chmod(file, 0o600);
+    tightenAcl(file); // rename can reset inheritance; re-tighten the final name
   } catch (error) {
     try { unlink(temp); } catch {}
     throw error;

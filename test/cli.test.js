@@ -6,6 +6,7 @@ const os = require('os');
 const path = require('path');
 const { spawn, spawnSync } = require('child_process');
 const rotation = require('../src/lib/rotation');
+const { assertOwnerOnly } = require('./helpers/owner-only');
 
 const CLI = path.join(__dirname, '..', 'bin', 'mousecrew.js');
 const TOKEN = 'cli-test-token';
@@ -299,7 +300,7 @@ test('session-record accepts the three window sources, replaces the agent record
     assert.equal(record.sessionId, JSON.parse(call.input).session_id);
     assert.equal(record.windowRef, call.windowRef);
   }
-  assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  assertOwnerOnly(file);
 });
 
 test('session-record rejects malformed or incomplete hook input without creating a record', async (t) => {
