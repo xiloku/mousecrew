@@ -383,7 +383,13 @@ function localDate(now) {
 }
 
 function rotateBody(agent, measurement, handoffDir, now = new Date()) {
-  const handoff = path.join(handoffDir, `${agent}-handoff`, `${localDate(now)}.md`);
+  // This path is prose written for an agent to read and act on, not a path we open.
+  // Keep it in forward-slash form on every platform so the instruction matches the
+  // /state/... convention used elsewhere (tests, docs, POSIX agents). On non-win32
+  // path.join already yields forward slashes, so this is byte-identical there; on
+  // win32 it rewrites the backslashes path.join would otherwise produce.
+  const handoff = path.join(handoffDir, `${agent}-handoff`, `${localDate(now)}.md`)
+    .split(path.sep).join('/');
   return [
     `Session rotation reminder: this session reports ${formatMeasurement(measurement)}.`,
     `At a clean stopping point, finish the current work before taking anything new, write a handoff to ${handoff}, then start a new session yourself.`,
