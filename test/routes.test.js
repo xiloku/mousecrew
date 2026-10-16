@@ -9,6 +9,7 @@ const Database = require('better-sqlite3');
 const { build } = require('../src/server');
 const { normalizeAgent } = require('../src/config');
 const { open } = require('../src/db');
+const { rmrfSync } = require('./helpers/rmrf');
 
 // Route-level tests.
 //
@@ -925,7 +926,6 @@ test('review snapshots have no update surface or automatic thaw timer', () => {
 
 test('opening an existing database adds project and review columns plus the snapshot table', (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mousecrew-migrate-'));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const dbPath = path.join(dir, 'old.db');
   open(dbPath).close();
 
@@ -939,7 +939,12 @@ test('opening an existing database adds project and review columns plus the snap
   old.close();
 
   const upgraded = open(dbPath);
-  t.after(() => upgraded.close());
+  // node:test runs t.after() hooks in DECLARED order, not reverse (nodejs/node#48736). Two
+  // separate hooks (remove-dir, then close-db) therefore ran rmSync while the db was still
+  // open -> EPERM on Windows, which no retry delay can clear because the handle is held for
+  // the whole attempt. Close the db FIRST, then remove, in one ordered hook. rmrfSync still
+  // absorbs the brief mmap-release lag that remains after close() returns on win32.
+  t.after(() => { upgraded.close(); rmrfSync(dir); });
   const columns = upgraded.db.prepare('PRAGMA table_info(work_orders)').all().map((c) => c.name);
   assert.ok(columns.includes('audit_revision'));
   assert.ok(columns.includes('frozen'));
