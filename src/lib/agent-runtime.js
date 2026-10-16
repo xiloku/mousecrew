@@ -24,6 +24,7 @@ const { EventEmitter } = require('events');
 const fs = require('fs');
 const path = require('path');
 const { newWindowSignpost } = require('./handoff');
+const { winSpawnOptions } = require('./win-spawn');
 
 class AgentRuntime extends EventEmitter {
   /**
@@ -185,6 +186,7 @@ class AgentRuntime extends EventEmitter {
       cwd: this.cfg.workDir,
       env: process.env,
       stdio: ['pipe', 'pipe', 'pipe'],
+      ...winSpawnOptions(command), // win32: run a .cmd/.bat CLI shim via cmd.exe, else no-op
     });
     this.proc = proc;
 
@@ -507,7 +509,7 @@ class AgentRuntime extends EventEmitter {
     this._setState('busy');
 
     const { command, args } = this.buildSpawnArgs();
-    const proc = this._spawn(command, args, { cwd: this.cfg.workDir, env: process.env, stdio: ['pipe', 'pipe', 'pipe'] });
+    const proc = this._spawn(command, args, { cwd: this.cfg.workDir, env: process.env, stdio: ['pipe', 'pipe', 'pipe'], ...winSpawnOptions(command) });
     let out = '';
     let err = '';
     const hard = setTimeout(() => { try { proc.kill('SIGTERM'); } catch {} }, this.cfg.turnHardMs);
