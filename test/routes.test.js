@@ -44,7 +44,13 @@ async function boot(t, crew = CREW, configOverrides = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mousecrew-routes-'));
   const tokenFile = path.join(dir, 'auth.json');
   fs.writeFileSync(tokenFile, JSON.stringify({ token: TOKEN }));
-  fs.chmodSync(tokenFile, 0o600);
+  // Owner-only, per platform: chmod 0600 on POSIX; strip inheritance + grant current user
+  // on Windows (where the server reads the real NTFS ACL via icacls, not the mode bits).
+  if (process.platform === 'win32') {
+    execFileSync('icacls', [tokenFile, '/inheritance:r', '/grant:r', `${os.userInfo().username}:F`], { windowsHide: true });
+  } else {
+    fs.chmodSync(tokenFile, 0o600);
+  }
 
   const config = {
     host: '127.0.0.1', port: 0,

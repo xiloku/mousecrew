@@ -12,12 +12,19 @@
 
 const crypto = require('crypto');
 const fs = require('fs');
+const { assertOwnerOnlyAccess } = require('./win-acl');
 
 function readTokenFile(file) {
   const st = fs.statSync(file);
-  // Permissions wider than owner-only mean the secret is already shared; treating the
-  // file as valid at that point is just filing the problem away.
-  if (st.mode & 0o077) {
+  // "Wider than owner-only means the secret is already shared" is the same rule on both
+  // platforms; only the way to measure it differs. On POSIX the mode bits say it directly.
+  // On Windows those bits are not meaningful (NTFS uses ACLs, and fs.statSync reports 0o666
+  // for a perfectly locked file), so the POSIX check would reject every file and mousecrew
+  // would never start — we read the real ACL via icacls instead. Both paths fail CLOSED:
+  // anything we cannot prove is owner-only is refused.
+  if (process.platform === 'win32') {
+    assertOwnerOnlyAccess(file); // throws unless only the current user (+SYSTEM/Admins) can read it
+  } else if (st.mode & 0o077) {
     throw new Error(`${file} is group/world accessible (want 0600)`);
   }
   const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));

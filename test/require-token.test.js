@@ -3,7 +3,29 @@ const assert = require('node:assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { execFileSync } = require('child_process');
 const { createRequireToken, readTokenFile, parseBearer, tokenMatches } = require('../src/lib/require-token');
+const { tightenAcl } = require('../src/lib/win-acl');
+
+const isWin = process.platform === 'win32';
+
+// Make a token file owner-only in a platform-appropriate way (chmod 0600 on POSIX,
+// icacls inheritance-strip + current-user grant on Windows), so "a correct file is
+// accepted" is tested for the right reason on both.
+function lockOwnerOnly(file) {
+  if (isWin) tightenAcl(file);
+  else fs.chmodSync(file, 0o600);
+}
+
+// Make a token file group/world accessible so the guard must reject it.
+function openWide(file) {
+  if (isWin) {
+    // Grant the broad "Users" group read access — the Windows analogue of 0o644.
+    execFileSync('icacls', [file, '/grant', '*S-1-5-32-545:R'], { windowsHide: true });
+  } else {
+    fs.chmodSync(file, 0o644);
+  }
+}
 
 // This is the front door. Everything here exists because the failure mode is silent:
 // a guard that stops guarding does not throw, it just starts saying yes.
@@ -85,10 +107,20 @@ test('a token file with permissions wider than owner-only is rejected', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mousecrew-tok-'));
   const file = path.join(dir, 'auth.json');
   fs.writeFileSync(file, JSON.stringify({ token: 'abc' }));
-  fs.chmodSync(file, 0o644);
-  assert.throws(() => readTokenFile(file), /group\/world accessible/);
+  lockOwnerOnly(file);   // start from a known-good owner-only state...
+  openWide(file);        // ...then widen it, so this test isolates the "wide" case.
+  assert.throws(() => readTokenFile(file), isWin ? /accessible to/ : /group\/world accessible/);
 
-  fs.chmodSync(file, 0o600);
+  // Re-lock it to a known-good owner-only state and confirm it is accepted. On Windows the
+  // widened ACE is an explicit entry that a plain re-grant would not remove, so the honest
+  // "now it is locked" reset is to recreate the file and tighten it from scratch.
+  if (isWin) {
+    fs.rmSync(file);
+    fs.writeFileSync(file, JSON.stringify({ token: 'abc' }));
+    tightenAcl(file);
+  } else {
+    fs.chmodSync(file, 0o600);
+  }
   assert.equal(readTokenFile(file), 'abc');
 });
 
@@ -96,6 +128,6 @@ test('a token file with no token field is an error, not an empty token', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mousecrew-tok-'));
   const file = path.join(dir, 'auth.json');
   fs.writeFileSync(file, JSON.stringify({ nope: 'abc' }), { mode: 0o600 });
-  fs.chmodSync(file, 0o600);
+  lockOwnerOnly(file);
   assert.throws(() => readTokenFile(file), /no "token" field/);
 });

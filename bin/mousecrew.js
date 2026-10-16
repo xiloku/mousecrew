@@ -10,6 +10,7 @@ const path = require('path');
 const os = require('os');
 const { buildIdentity } = require('../src/lib/identity');
 const rotation = require('../src/lib/rotation');
+const { assertOwnerOnlyAccess } = require('../src/lib/win-acl');
 
 function expandTilde(p) {
   if (p === '~') return os.homedir();
@@ -31,12 +32,19 @@ function loadClientConfig() {
     const tokenFile = expandTilde(cfg.tokenFile || '~/.config/mousecrew/auth.json');
     try {
       const st = fs.statSync(tokenFile);
-      if (st.mode & 0o077) {
-        die(`${tokenFile} is group/world readable (want 0600) — refusing to use it`);
+      // Same owner-only rule as the server (src/lib/require-token.js), measured per
+      // platform: POSIX mode bits on Unix, the real NTFS ACL via icacls on Windows,
+      // where fs.statSync().mode is not meaningful. Fail closed either way.
+      if (process.platform === 'win32') {
+        assertOwnerOnlyAccess(tokenFile); // throws unless current user (+SYSTEM/Admins) only
+      } else if (st.mode & 0o077) {
+        throw new Error(`${tokenFile} is group/world readable (want 0600) — refusing to use it`);
       }
       token = JSON.parse(fs.readFileSync(tokenFile, 'utf8')).token;
     } catch (e) {
-      die(`no token: set MOUSECREW_TOKEN or create ${tokenFile} (mode 0600) with {"token":"..."}`);
+      die(e && e.message
+        ? e.message
+        : `no token: set MOUSECREW_TOKEN or create ${tokenFile} (mode 0600) with {"token":"..."}`);
     }
   }
   return { url, token };
