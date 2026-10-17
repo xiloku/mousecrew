@@ -30,6 +30,21 @@ To lock a token file down by hand:
 icacls "C:\path\to\auth.json" /inheritance:r /grant:r "%USERNAME%:F"
 ```
 
+Or let the helper script do all of it — generate a random token, write
+`{"token": "..."}`, and apply exactly that `icacls` lock to the **file** (never
+the directory):
+
+```
+pwsh -File scripts/win/new-token.ps1
+# or an explicit path, overwriting any existing file:
+pwsh -File scripts/win/new-token.ps1 -Path C:\path\to\auth.json -Force
+```
+
+It writes to `%USERPROFILE%\.config\mousecrew\auth.json` by default, creates the
+parent directory if missing (without touching its ACL), and runs on both Windows
+PowerShell 5.1 and PowerShell 7+. After it runs, `assertOwnerOnlyAccess()` accepts
+the file and the server reads the token without failing closed.
+
 ## local / exec runners can launch a `.cmd` or `.bat`
 
 Most globally-installed CLIs on Windows (claude, kiro-cli, codex, opencode, ...)
@@ -42,6 +57,37 @@ shell when the configured command is a bare name or a `.cmd`/`.bat`
 (`src/lib/win-spawn.js`). The message body is passed over **stdin**, never on the
 command line, so going through `cmd.exe` does not expose it to shell parsing.
 
+### Argument quoting on the shell path
+
+When the shell is engaged, Node builds the command line as
+`command + ' ' + args.join(' ')` and hands it to `cmd.exe` **without quoting the
+args**. An argument that contains spaces or cmd metacharacters would then be split
+or re-interpreted — e.g. `--append-system-prompt-file C:\Users\Jo Smith\sys.md`
+arrives at the CLI as two broken arguments.
+
+mousecrew fixes this with `winSpawnArgs()` (`src/lib/win-spawn.js`), which quotes
+each argument for `cmd.exe` **only on the win32 shell path**: it wraps a token that
+holds whitespace / a quote / a metacharacter in double quotes, escapes embedded
+quotes and trailing backslashes for the child's argv parser, and caret-escapes cmd
+metacharacters (`& | < > ( ) ^ % !`) so they survive the extra `cmd.exe` parse a
+`.cmd`/`.bat` shim adds. Off win32, or for a direct `.exe` (shell not engaged), it
+returns the arguments unchanged, so the POSIX code path is byte-identical.
+
+## Killing a turn kills the whole process tree
+
+When a `.cmd`/`.bat` CLI is launched through the shell, the spawned process is a
+`cmd.exe` wrapper and the real CLI is its **child**. A plain `proc.kill()` reaps
+only the wrapper and leaves the CLI (and anything it spawned) running — an orphaned
+turn process.
+
+So on win32, every teardown path — graceful `stop()`, the wedged-process
+`_killAndRestart()`, and the `exec` runner's turn-timeout — goes through
+`killProcessTree()` (`src/lib/win-spawn.js`), which runs
+`taskkill /PID <pid> /T /F` to take down the whole tree (`/T` = tree, `/F` =
+force). On POSIX `killProcessTree()` is exactly `proc.kill(signal)` — same call,
+same signal, nothing added — so POSIX teardown is byte-identical. If `taskkill`
+cannot be launched, it falls back to `proc.kill()` so a kill still happens.
+
 ## A remote worker's `--cli` must be a real `.exe` on Windows
 
 The remote worker (`bin/mousecrew-worker.js`) passes the prompt as a command-line
@@ -52,3 +98,25 @@ metacharacter parsing — a command-injection / argument-mangling risk.
 For that reason mousecrew does **not** silently wrap the worker CLI in a shell.
 On Windows, point the worker's `--cli` at a real `.exe` (or an operator-provided
 wrapper you trust), not at a `.cmd`/`.bat` shim.
+
+## Known limitations
+
+These are accepted, documented edge cases of the NTFS-ACL enforcement — all of
+them fail **safe** (refuse / err on the side of locked-down), never open.
+
+- **Localized `icacls` output.** `assertOwnerOnlyAccess()` parses `icacls`
+  output, which is localized on non-English Windows. The parser keys off the
+  structural `principal:(flags)` form and ignores the trailing "Successfully
+  processed" summary line (which has no `:(`), so localization does not change the
+  principal list it reads. A translated summary line is simply skipped. If a future
+  Windows build localized the ACE form itself, the parser would fail to recognise a
+  principal and the file would be **rejected (fail closed)**, not wrongly accepted.
+- **AzureAD / work-or-school account names.** `assertOwnerOnlyAccess()` compares
+  the current user (`os.userInfo().username`, a bare login name) against the bare
+  account name `icacls` prints. For an AzureAD/Entra account `icacls` may print a
+  form (e.g. `AzureAD\Given Name`) that does not match the bare login name, in
+  which case a token file that is in fact owner-only is treated as "shared" and
+  **rejected (fail closed)** — the server will not start on it. The safe
+  workaround is to grant the exact principal `icacls` reports (or use a local
+  account for the service identity). This errs toward refusing a legitimate file
+  rather than accepting a shared one.
