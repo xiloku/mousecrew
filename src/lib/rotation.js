@@ -1,7 +1,6 @@
 const fs = require('fs');
 const path = require('path');
 const { randomUUID } = require('crypto');
-const { execFileSync } = require('child_process');
 const { tightenAcl } = require('./win-acl');
 
 const TAIL_BYTES = 128 * 1024;
@@ -308,17 +307,27 @@ function measureTokens(tail) {
   return null;
 }
 
-function measureMarker(file, marker, {
-  exec = (command, args) => execFileSync(command, args, { encoding: 'utf8', timeout: 8000 }),
-} = {}) {
-  let output;
-  try { output = exec('grep', ['-F', '-c', '--', marker, file]); }
+function measureMarker(file, marker, { readFile = fs.readFileSync } = {}) {
+  // Count the lines that contain the literal `marker` substring. This used to shell out
+  // to `grep -F -c -- <marker> <file>`, which does not exist on Windows (so the marker
+  // reminder silently never fired there). A pure-JS line count is byte-identical to what
+  // `grep -F -c` reported on POSIX: `-F` makes the pattern a fixed string (no regex), and
+  // `-c` counts matching lines, not total occurrences — a line with the marker twice
+  // still counts once. grep's final line is matched even without a trailing newline, so a
+  // split on newlines (which yields that final partial line as its own element) matches.
+  if (!marker) return 0;
+  let text;
+  try { text = String(readFile(file, 'utf8')); }
   catch (error) {
-    if (error && error.status === 1) return 0;
+    if (error && error.code === 'ENOENT') return 0; // grep -c on a missing file -> no matches
     throw error;
   }
-  const value = Number.parseInt(String(output).trim(), 10);
-  return Number.isFinite(value) ? value : null;
+  if (text === '') return 0;
+  let count = 0;
+  for (const line of text.split('\n')) {
+    if (line.includes(marker)) count += 1;
+  }
+  return count;
 }
 
 function rotationRules(rotation) {

@@ -40,21 +40,31 @@ test('token measurement reads a bounded tail and uses the last reported model us
   assert.equal(rotation.measureTokens(JSON.stringify({ usage: { input_tokens: '100' } })), null);
 });
 
-test('marker measurement counts matching lines without passing config through a shell', () => {
-  let call;
+test('marker measurement counts matching lines in pure JS (no grep), like grep -F -c', () => {
+  // Counts LINES containing the literal marker, not total occurrences: a line holding the
+  // marker twice counts once (grep -c semantics). Pure JS so it works on Windows, where
+  // there is no grep and the reminder used to silently never fire.
+  const transcript = [
+    '{"type":"compacted"} first',
+    '{"type":"assistant"}',
+    'twice "type":"compacted" and again "type":"compacted"', // one line -> counts once
+    '{"type":"compacted"}',                                  // final line, no trailing \n
+  ].join('\n');
+  let seen;
   const value = rotation.measureMarker('/tmp/transcript.jsonl', '"type":"compacted"', {
-    exec: (command, args) => {
-      call = { command, args };
-      return '10\n';
-    },
+    readFile: (file, enc) => { seen = { file, enc }; return transcript; },
   });
-  assert.equal(value, 10);
-  assert.deepEqual(call, {
-    command: 'grep',
-    args: ['-F', '-c', '--', '"type":"compacted"', '/tmp/transcript.jsonl'],
-  });
-  assert.equal(rotation.measureMarker('/tmp/x', 'none', {
-    exec: () => { const error = new Error('no match'); error.status = 1; throw error; },
+  assert.equal(value, 3);
+  assert.deepEqual(seen, { file: '/tmp/transcript.jsonl', enc: 'utf8' });
+
+  // No matches -> 0, matching grep -F -c returning "0" (exit status 1).
+  assert.equal(rotation.measureMarker('/tmp/x', 'none', { readFile: () => 'a\nb\nc' }), 0);
+  // Empty file / empty marker -> 0, never a spurious count.
+  assert.equal(rotation.measureMarker('/tmp/x', 'm', { readFile: () => '' }), 0);
+  assert.equal(rotation.measureMarker('/tmp/x', '', { readFile: () => 'm\nm' }), 0);
+  // A missing transcript reads as no matches, like grep -c on a nonexistent file.
+  assert.equal(rotation.measureMarker('/tmp/gone', 'm', {
+    readFile: () => { const e = new Error('nope'); e.code = 'ENOENT'; throw e; },
   }), 0);
 });
 
