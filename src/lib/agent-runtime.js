@@ -24,7 +24,7 @@ const { EventEmitter } = require('events');
 const fs = require('fs');
 const path = require('path');
 const { newWindowSignpost } = require('./handoff');
-const { winSpawnOptions } = require('./win-spawn');
+const { winSpawnOptions, winSpawnArgs } = require('./win-spawn');
 
 class AgentRuntime extends EventEmitter {
   /**
@@ -182,7 +182,7 @@ class AgentRuntime extends EventEmitter {
     console.log(`[${this.name}] starting ${command}${this.sessionId ? ` (resume ${this.sessionId.slice(0, 8)})` : ' (new session)'}`);
 
     const generation = ++this._generation;
-    const proc = this._spawn(command, args, {
+    const proc = this._spawn(command, winSpawnArgs(command, args), {
       cwd: this.cfg.workDir,
       env: process.env,
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -509,7 +509,7 @@ class AgentRuntime extends EventEmitter {
     this._setState('busy');
 
     const { command, args } = this.buildSpawnArgs();
-    const proc = this._spawn(command, args, { cwd: this.cfg.workDir, env: process.env, stdio: ['pipe', 'pipe', 'pipe'], ...winSpawnOptions(command) });
+    const proc = this._spawn(command, winSpawnArgs(command, args), { cwd: this.cfg.workDir, env: process.env, stdio: ['pipe', 'pipe', 'pipe'], ...winSpawnOptions(command) });
     let out = '';
     let err = '';
     const hard = setTimeout(() => { try { proc.kill('SIGTERM'); } catch {} }, this.cfg.turnHardMs);
