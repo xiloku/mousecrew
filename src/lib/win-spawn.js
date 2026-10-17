@@ -26,6 +26,7 @@
 // returns the args array UNCHANGED, so the POSIX code path is byte-identical.
 
 const path = require('path');
+const { execFileSync } = require('child_process');
 
 // Extensions that are directly executable by CreateProcess without a shell.
 const DIRECT_EXT = new Set(['.exe', '.com']);
@@ -109,4 +110,49 @@ function winSpawnArgs(command, args) {
   return list.map(quoteArgForCmd);
 }
 
-module.exports = { winSpawnOptions, winSpawnArgs, needsShellOnWin, quoteArgForCmd };
+/**
+ * Kill a child process the right way for the platform.
+ *
+ * On POSIX this is EXACTLY `proc.kill(signal)` — same call, same signal, nothing added —
+ * so the POSIX teardown path is byte-identical to before.
+ *
+ * On win32 a shell-spawned CLI is a `cmd.exe` wrapper with the real CLI as its child; a
+ * plain `proc.kill()` reaps only the wrapper and orphans the CLI (and whatever IT spawned)
+ * — a leaked turn process that keeps running. So on win32 we kill the whole tree with
+ * `taskkill /PID <pid> /T /F` (/T = tree, /F = force; Windows kill is always forceful, so
+ * the POSIX signal name does not apply). If taskkill cannot be launched or there is no
+ * pid, we fall back to `proc.kill(signal)` so a kill still happens.
+ *
+ * @param {import('child_process').ChildProcess} proc
+ * @param {NodeJS.Signals|number} [signal]
+ * @param {{platform?: string, taskkill?: (pid:number)=>void, kill?: (sig?:any)=>void}} [deps]
+ * @returns {boolean} true if a tree-kill was issued, false if the single-process path ran
+ */
+function killProcessTree(proc, signal, {
+  platform = process.platform,
+  taskkill = (pid) => execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], {
+    windowsHide: true, stdio: 'ignore',
+  }),
+  kill,
+} = {}) {
+  const single = () => {
+    if (kill) { kill(signal); return; }
+    try { proc.kill(signal); } catch { /* already gone */ }
+  };
+  if (platform !== 'win32' || !proc || !proc.pid) {
+    single();
+    return false;
+  }
+  try {
+    taskkill(proc.pid);
+    return true;
+  } catch {
+    // taskkill missing / pid already gone: still attempt the single-process kill.
+    single();
+    return false;
+  }
+}
+
+module.exports = {
+  winSpawnOptions, winSpawnArgs, needsShellOnWin, quoteArgForCmd, killProcessTree,
+};

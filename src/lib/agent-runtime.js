@@ -24,7 +24,7 @@ const { EventEmitter } = require('events');
 const fs = require('fs');
 const path = require('path');
 const { newWindowSignpost } = require('./handoff');
-const { winSpawnOptions, winSpawnArgs } = require('./win-spawn');
+const { winSpawnOptions, winSpawnArgs, killProcessTree } = require('./win-spawn');
 
 class AgentRuntime extends EventEmitter {
   /**
@@ -221,9 +221,11 @@ class AgentRuntime extends EventEmitter {
       // Both fallbacks are unref'd: in a server they change nothing, but in a test or a
       // short-lived CLI they would be the only live handles and the process would hang
       // for their full duration. Cleanup code can be the thing that leaks.
-      const hard = setTimeout(() => { try { proc.kill('SIGKILL'); } catch {} }, 5000);
+      // killProcessTree is `proc.kill(signal)` on POSIX (byte-identical to before) and a
+      // whole-tree taskkill on win32, so a shell-wrapped CLI child is not left orphaned.
+      const hard = setTimeout(() => { killProcessTree(proc, 'SIGKILL'); }, 5000);
       if (hard.unref) hard.unref();
-      const term = setTimeout(() => { try { proc.kill('SIGTERM'); } catch {} }, 200);
+      const term = setTimeout(() => { killProcessTree(proc, 'SIGTERM'); }, 200);
       if (term.unref) term.unref();
     }
     this._setState('stopped');
@@ -283,7 +285,7 @@ class AgentRuntime extends EventEmitter {
     }
     this.proc = null;
     this._generation++;
-    if (proc) { try { proc.kill('SIGTERM'); } catch {} }
+    if (proc) { killProcessTree(proc, 'SIGTERM'); }
     this._setState('error');       // not 'stopped', so _onExit reschedules and drains
     this._scheduleRestart();
   }
@@ -512,7 +514,7 @@ class AgentRuntime extends EventEmitter {
     const proc = this._spawn(command, winSpawnArgs(command, args), { cwd: this.cfg.workDir, env: process.env, stdio: ['pipe', 'pipe', 'pipe'], ...winSpawnOptions(command) });
     let out = '';
     let err = '';
-    const hard = setTimeout(() => { try { proc.kill('SIGTERM'); } catch {} }, this.cfg.turnHardMs);
+    const hard = setTimeout(() => { killProcessTree(proc, 'SIGTERM'); }, this.cfg.turnHardMs);
     if (hard.unref) hard.unref();
 
     proc.stdout.on('data', (d) => {
