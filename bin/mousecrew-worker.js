@@ -41,7 +41,10 @@ function runTurn(text) {
   return new Promise((resolve, reject) => {
     const a = ['-p', text, '--output-format', 'text', '--dangerously-skip-permissions'];
     if (MODEL) a.push('--model', MODEL);
-    const proc = spawn(CLI, a, { cwd: WORKDIR, env: process.env, stdio: ['ignore', 'pipe', 'pipe'] });
+    // A .js shim runs under this node directly: no shell, so multi-line prompts survive on win32.
+    const isJs = /\.[cm]?js$/i.test(CLI);
+    const proc = spawn(isJs ? process.execPath : CLI, isJs ? [CLI, ...a] : a,
+      { cwd: WORKDIR, env: process.env, stdio: ['ignore', 'pipe', 'pipe'] });
     let out = '';
     let err = '';
     const timer = setTimeout(() => {
